@@ -3,180 +3,218 @@
 **Machine learning models for neoantigen candidate classification in personalized cancer vaccine design**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![pVACtools](https://img.shields.io/badge/integrated%20into-pVACtools%20v7-teal)](https://pvactools.readthedocs.io/en/7.0.0_docs/)
-[![DOI](https://img.shields.io/badge/DOI-pending-lightgrey)]()
+[![pVACtools](https://img.shields.io/badge/pVACtools-models-teal)](https://pvactools.readthedocs.io/)
 
----
+NEAT contains models and analysis code for classifying neoantigen candidates as
+**Accept**, **Review**, or **Reject**, using expert Immunogenomics Tumor Board
+(ITB) evaluations and genomic, expression, and MHC binding features.
 
-## Overview
+The repository has two workflows with separate dependency files and model artifacts:
 
-pVACml houses the machine learning models and analysis code developed to support automated neoantigen candidate pre-classification within the [pVACtools](https://pvactools.readthedocs.io/en/7.0.0_docs/) suite. The model is trained on expert Immunogenomics Tumor Board (ITB) decisions from real-world personalized cancer vaccine clinical trials and classifies neoantigen peptide candidates as **Accept**, **Review**, or **Reject** based on a combination of genomic, expression, and MHC binding features.
+| Section | Purpose | Instructions | Dependencies |
+| --- | --- | --- | --- |
+| Manuscript | Reproduce figures, repeated model-development analyses, and a demonstration prediction | [Manuscript README](manuscript/README.md) | [manuscript/requirements.txt](manuscript/requirements.txt) |
+| Model development | Encode data and retrain the revised pVACtools 7.2 model; retain the legacy 7.0 predictor | [Scripts README](model_development/scripts/README.md) | [model_development/requirements.txt](model_development/requirements.txt) |
 
-The repository is organized into **two independent sections**. They use **different dependency files** and **different model bundles**:
-
-| Section | Purpose | Code & data location | Dependencies |
-|--------|---------|----------------|--------------|
-| **Manuscript** | Reproduce figures, analyses, manuscript model training workflows, and a demonstration prediction on a new case | [`manuscript/`](manuscript/) | [`manuscript/requirements.txt`](manuscript/requirements.txt) |
-| **Model development** | Retrain / refresh the pipeline model and artifacts intended for **pVACtools** integration (current version compatible with pVACtools 7.0) | [`model_development/`](model_development/) | [`model_development/requirements.txt`](model_development/requirements.txt) |
-
-**Important distinctions**
-
-- The **Model development** section is the one meant for **future retraining** and for the files that are **copied into the pVACtools codebase** for the ML function. The staging folder is **`model_development/model/pvactools7.0_model/`**, which corresponds to [`pvactools/supporting_files/ml_model_artifacts/`](https://github.com/griffithlab/pVACtools/tree/master/pvactools/supporting_files/ml_model_artifacts) in [griffithlab/pVACtools](https://github.com/griffithlab/pVACtools) (see [`model_development/model/pvactools7.0_model/README.md`](model_development/model/pvactools7.0_model/README.md)).
-
-> End users running pVACseq with ML enabled should follow [pVACtools documentation](https://pvactools.readthedocs.io/en/latest/pvacview/pvacseq_module/pvacseq_vignette.html#ml-based-neoantigen-evaluation-predictions) (e.g. `pvacseq add_ml_predictions`). This README focuses on **developers** reproducing the paper or refreshing the v7 model from this repo.
-
----
+Run the commands below from the **NEAT repository root**. Use separate Python
+environments for the two workflows.
 
 ## Repository structure
 
-```
+```text
 NEAT/
 ├── README.md
 ├── LICENSE
-├── .gitignore
-│
-├── manuscript/                      # Publication reproducibility (NOT the pVACtools-shipped bundle)
-│   ├── requirements.txt             
-│   ├── manuscript_model/            # Artifacts for manuscript/scripts/predict.py demo
+├── manuscript/
+│   ├── README.md
+│   ├── VALIDATION.md
+│   ├── requirements.txt
+│   ├── manuscript_final_model/          # Final bundle and best parameters
+│   ├── manuscript_interim_model/        # Historical forest, imputer, and encoders
 │   ├── data/
-│   │   ├── predict_new_case_data/   # Demo inputs for manuscript prediction script
-│   │   ├── training_testing_data/
-│   │   ├── imputation_analysis/
+│   │   ├── interim_model_training_testing_data/
+│   │   ├── missing_data_handeling/      # Strategy 1 and Strategy 2 datasets
+│   │   ├── prospective_cohort/          # Ready comparison CSV and provenance
 │   │   ├── review_time_analysis_data/
-│   │   ├── manuscript_prediction_results/
-│   │   └── …
-│   └── scripts/
-│       ├── ml_randomforest_model.py
-│       ├── ml_logistic_model.py
-│       ├── predict.py               # Manuscript: demo prediction on a new case
-│       ├── evaluation_on_prospective_test_set.py
-│       ├── imputation_analysis.py
-│       └── review_time_analysis.py
-│
-└── model_development/               # Model development 
-    ├── requirements.txt             
-    ├── data/                        # Pre- & post-imputation tables; prediction outputs
+│   │   ├── predict_new_case_data/       # Demo pVACseq TSVs
+│   │   └── manuscript_prediction_results/
+│   ├── scripts/
+│   │   ├── model_development_100iter/
+│   │   ├── prospective_cohort_analysis/
+│   │   ├── ml_randomforest_interim_model.py
+│   │   ├── predict_final_model.py
+│   │   └── review_time_analysis.py
+│   └── results/                        # Generated analysis outputs
+└── model_development/
+    ├── requirements.txt
+    ├── data/                           # Pre-encoding and encoded tables
     ├── scripts/
-    │   ├── impute_missing.py        # Step 1: fit encoders + IterativeImputer
-    │   ├── train.py                 # Step 2: tune + train BalancedRandomForest
-    │   └── predict.py               # Step 3: score a new case
+    │   ├── README.md
+    │   ├── encode_missing.py
+    │   ├── train_model.py
+    │   └── predict.py                  # Legacy 7.0 prediction
     └── model/
-        ├── temporary_model_artifacts/   
-        └── pvactools7.0_model/          # Staging → pVACtools …/ml_model_artifacts
-            ├── README.md                
-            ├── rf_downsample_model_*.pkl
-            ├── trained_imputer_*.joblib
-            └── label_encoders_*.pkl
+        ├── pvactools7.2_model/          # Revised model and saved evaluations
+        │   ├── random_forest_ds_pvactools7.2.joblib
+        │   ├── cv_results.csv
+        │   ├── oob_performance.csv
+        │   ├── prospective_performance.csv
+        │   └── prospective_predictions.csv
+        └── pvactools7.0_model/          # Legacy model, imputer, and encoders
+            ├── README.md
+            ├── rf_downsample_model_numpy126.pkl
+            ├── trained_imputer_numpy126.joblib
+            ├── label_encoders_numpy126.pkl
+            └── archived/               # Previous training/imputation scripts and data
 ```
 
----
+## Manuscript analyses
 
-## Manuscript (`manuscript/`)
-
-Use this when reproducing **figures, statistical analyses, manuscript RF/logistic workflows**, and the **manuscript** walkthrough of prediction on a new case.
-
-### Environment
+For a fresh environment:
 
 ```bash
-pip install -r manuscript/requirements.txt
+conda create -n neoantigen_ml python=3.13 pip
+conda activate neoantigen_ml
+python -m pip install -r manuscript/requirements.txt
 ```
 
-Use **only** [`manuscript/requirements.txt`](manuscript/requirements.txt) for scripts under [`manuscript/scripts/`](manuscript/scripts/). That environment is aligned with the paper’s tooling (e.g. matplotlib, seaborn, broader analysis stack) and is **separate** from [`model_development/requirements.txt`](model_development/requirements.txt).
-
-### Demo prediction (manuscript)
-
-The script [`manuscript/scripts/predict.py`](manuscript/scripts/predict.py) merges three pVACseq-style TSVs for one sample, applies the **manuscript** imputer/encoders/model, and writes an aggregated TSV.
-
-Place inputs under **`manuscript/data/predict_new_case_data/`**:
-
-- `<sample>.MHC_I.all_epitopes.aggregated.tsv`
-- `<sample>.MHC_I.all_epitopes.tsv`
-- `<sample>.MHC_II.all_epitopes.aggregated.tsv`
-
-From the repository root:
+### Reproduce figures
 
 ```bash
-python manuscript/scripts/predict.py
+python manuscript/scripts/prospective_cohort_analysis/run_all.py
+python manuscript/scripts/review_time_analysis.py
 ```
 
+The prospective workflow reads the ready
+[prospective_model_comparison.csv](manuscript/data/prospective_cohort/prospective_model_comparison.csv).
+It generates probability comparisons, ROC/PR curves, confusion matrices, and
+interim-model threshold sensitivity with and without calibration patients.
+Data preparation and original prediction tables are not required.
 
-### Other manuscript analyses
+Outputs are saved under `manuscript/results/prospective_cohort/` (35 PNGs plus
+threshold data/manifests) and `manuscript/results/review_time_analysis/` (one ECDF
+PNG). See the [prospective instructions](manuscript/scripts/prospective_cohort_analysis/README.md)
+for individual analyses.
+
+### Reproduce model development
+
+The [100-iteration workflow](manuscript/scripts/model_development_100iter/README_model_development_CIs.md)
+compares four models, peptide and patient splits, and two preprocessing
+strategies. It reads the supplied datasets in
+`manuscript/data/missing_data_handeling/` and saves empirical 95% intervals and
+the combined performance table under `manuscript/results/model_development_CIs/`.
+
+For the two original interim random forests on the fixed training/test split:
 
 ```bash
-cd manuscript/scripts
-python <script_name>.py
+python manuscript/scripts/ml_randomforest_interim_model.py --jobs 2
 ```
 
-Examples include prospective test evaluation, review-time analysis, and imputation comparisons. Each script may assume paths under `manuscript/data/`.
+This reads `manuscript/data/interim_model_training_testing_data/` and writes
+models, tuning results, and plots under `manuscript/results/randomforest/`.
+The fixed split shares patients between training and testing. Full training
+searches can take substantial time; see the [manuscript instructions](manuscript/README.md)
+for details.
 
----
-
-## Model development (`model_development/`)
-
-Use this when **retraining** or regenerating artifacts for the **pVACtools**–compatible pipeline. Scripts live under **`model_development/scripts/`** and are intended to be run **in this order**:
-
-1. [`model_development/scripts/impute_missing.py`](model_development/scripts/impute_missing.py) — load pre-imputation table, impute missing values.
-2. [`model_development/scripts/train.py`](model_development/scripts/train.py) — tune and train `BalancedRandomForestClassifier` and save the model.
-3. [`model_development/scripts/predict.py`](model_development/scripts/predict.py) — for a new case, merge class I/II inputs, apply saved imputer/encoders/model, write ML prediction TSV.
-
-### Environment
+### Predict a new case
 
 ```bash
-pip install -r model_development/requirements.txt
+python manuscript/scripts/predict_final_model.py
 ```
 
-Use [`model_development/requirements.txt`](model_development/requirements.txt) (NumPy / scikit-learn / imbalanced-learn pins aligned with the `neoantigen_ml_numpy126`–style stack used for these scripts). Do **not** mix this file with `manuscript/requirements.txt` unless you understand the version differences.
+The demo reads three `Test.*.tsv` files from
+`manuscript/data/predict_new_case_data/`, adds Strategy 2 missingness indicators,
+fills missing predictors with `-1`, and uses
+[manuscript_final_model/model_bundle.joblib](manuscript/manuscript_final_model/model_bundle.joblib).
+It writes the aggregated prediction TSV under
+`manuscript/data/manuscript_prediction_results/`.
 
-### Artifacts shipped to pVACtools
+For another sample:
 
-The directory **`model_development/model/pvactools7.0_model/`** holds the model bundle **intended to be copied into the pVACtools repository** for the v7 ML path. In **pVACtools**, the same files live under:
+```bash
+python manuscript/scripts/predict_final_model.py \
+  --sample SAMPLE \
+  --data-dir /path/to/pvacseq_tables \
+  --output-dir /path/to/predictions
+```
 
-**[`pvactools/supporting_files/ml_model_artifacts/`](https://github.com/griffithlab/pVACtools/tree/master/pvactools/supporting_files/ml_model_artifacts)**  
-([`griffithlab/pVACtools`](https://github.com/griffithlab/pVACtools) on GitHub)
+Supply `<sample>.MHC_I.all_epitopes.aggregated.tsv`,
+`<sample>.MHC_I.all_epitopes.tsv`, and
+`<sample>.MHC_II.all_epitopes.aggregated.tsv`.
+See the [validation notes](manuscript/VALIDATION.md) for checks, training limits,
+and the historical final bundle's version warning.
 
-| Here (this repo) | In pVACtools |
-|------------------|----------------|
-| `model_development/model/pvactools7.0_model/` | `pvactools/supporting_files/ml_model_artifacts/` |
+## pVACtools 7.2 model development
 
----
+In a separate environment, install the model-development dependencies and run:
+
+```bash
+python -m pip install -r model_development/requirements.txt
+python model_development/scripts/encode_missing.py
+python model_development/scripts/train_model.py \
+  --input model_development/data/merged_df_encoded.csv \
+  --output-dir model_development/model/pvactools7.2_retraining \
+  --jobs 2
+```
+
+`encode_missing.py` reads `model_development/data/merged_df_pre_imputation.csv`
+and writes `merged_df_encoded.csv` in the same directory, adding WT/MT/RNA
+missingness indicators and filling supported missing measurements with `-1`.
+
+`train_model.py` tunes a balanced random forest by three-fold row-level
+cross-validation, then fits all eligible rows. It saves `model_bundle.joblib`,
+best parameters, CV results, OOB diagnostics, and feature importance. Use the
+explicit input path above because its built-in input default is outdated. The
+output directory must be empty; retraining does not replace the saved 7.2 model
+automatically or evaluate the prospective cohort.
+
+The existing
+[pvactools7.2_model directory](model_development/model/pvactools7.2_model/)
+contains `random_forest_ds_pvactools7.2.joblib` and saved CV, OOB, and prospective
+evaluation outputs. See the [scripts README](model_development/scripts/README.md)
+for inputs, outputs, and usage of each script.
+
+### Legacy pVACtools 7.0 workflow
+
+`model_development/scripts/predict.py` still uses the legacy model, fitted
+imputer, and encoders in
+[pvactools7.0_model/](model_development/model/pvactools7.0_model/README.md).
+It has not been adapted to the 7.2 bundle. Previous `impute_missing.py` and
+`old_train.py` scripts are retained under `pvactools7.0_model/archived/`.
+
+For the legacy demo only:
+
+```bash
+python model_development/scripts/predict.py
+```
+
+This reads the bundled manuscript demo TSVs and writes
+`model_development/data/Test.MHC_I.all_epitopes.aggregated.ML_predict.tsv`.
+The revised model requires its matching missingness encoding and bundle loader.
+For pVACseq/pVACview integration, consult the
+[pVACtools documentation](https://pvactools.readthedocs.io/).
 
 ## Dataset
 
-The entire dataset (training set, development test set, prospective test set) comprises **1,943 expert-labeled neoantigen peptide candidates** spanning **33 patients** and **8 cancer types** from three clinical trials at Washington University School of Medicine:
+The development analysis uses 1,237 eligible candidates from 21 patients
+(from 1,324 rows before excluding development cases labeled Review). The
+prospective cohort contains 706 candidates from 12 patients, for 1,943 analysis
+candidates across 33 patients.
+
+The cohorts span eight cancer types from three clinical trials at Washington
+University School of Medicine:
 
 | Trial | Cancer type | Patients |
-|---|---|---|
+| --- | --- | --- |
 | NCT05111353 | Pancreatic cancer | 14 |
 | NCT03606967 | Metastatic TNBC | 11 |
 | NCT05741242 | Basket trial (multiple types) | 8 |
 
-Each record includes ITB labels (Accept / Reject / Review) and up to 72 features covering MHC binding predictions, RNA expression, tumor variant allele frequency, transcript support, driver gene status, etc.
-
-> **Note on data availability:** Clinical genomic data from individual patients cannot be shared publicly due to IRB restrictions. Aggregate feature matrices used for model training are provided in [`manuscript/data/`](manuscript/data/) in de-identified form.
-
----
-
-## Integration with pVACtools
-
-The production model is integrated into **pVACtools v7**. End-user commands (for example):
-
-```bash
-pvacseq run ... --run-ml-predictions
-```
-
-```bash
-pvacseq add_ml_predictions \
-  input.tsv \
-  output_dir/ \
-  --accept-threshold 0.55 \
-  --reject-threshold 0.30
-```
-
-Predictions are displayed in **pVACview** alongside binding affinity, expression, and variant-level features. Predicted labels are pre-populated but fully editable during ITB review.
-
-**Developers:** when updating the bundled model in pVACtools from this repository, copy from **`model_development/model/pvactools7.0_model/`** into **[`pvactools/supporting_files/ml_model_artifacts/`](https://github.com/griffithlab/pVACtools/tree/master/pvactools/supporting_files/ml_model_artifacts)** after completing **`model_development/scripts`:** `impute_missing.py` → `train.py` → `predict.py` (and validate outputs), using [`model_development/requirements.txt`](model_development/requirements.txt).
-
----
+The supplied feature tables use anonymized `pt_XX` patient IDs. They include ITB
+labels and genomic, expression, and MHC prediction features; Strategy 2 adds
+three missingness indicators to the 72 predictors. The patient-ID mapping is
+not included and is not required to run the manuscript analyses. Clinical
+genomic source data are not included due to IRB restrictions.
 
 ## Citation
 
@@ -192,7 +230,7 @@ Automating immunogenomic tumor board decision-making for neoantigen cancer vacci
 
 ## Related resources
 
-- [pVACtools documentation](https://pvactools.readthedocs.io/en/7.0.0_docs/)
+- [pVACtools documentation](https://pvactools.readthedocs.io/)
 - [pVACtools ML model artifacts on GitHub](https://github.com/griffithlab/pVACtools/tree/master/pvactools/supporting_files/ml_model_artifacts)
 - [pVACview interface](https://pvactools.readthedocs.io/en/latest/pvacview.html)
 - [ImmunoNX pipeline](https://github.com/griffithlab/ImmunoNX_protocol)

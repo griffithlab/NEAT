@@ -1,0 +1,68 @@
+{
+  "sources": {
+    "interim_reference": {
+      "filename": "prospective_test_set.csv",
+      "sha256": "f673def8acc3715b06a1a12767c499542f426d181be633f770a4da89c90acea7"
+    },
+    "final_predictions": {
+      "filename": "prospective_predictions.csv",
+      "sha256": "3859b8595a74122ad1c30195f54e0b2d236a3b645b43690ff464207f77bd103a"
+    }
+  },
+  "output_sha256": "daf914209809b9be30ca914772008988883d3dc4ddcb7310b1de01d60a5ab675",
+  "rows": 706,
+  "patients": 12,
+  "columns": [
+    "TSL",
+    "interim_accept_probability",
+    "Num Passing Transcripts",
+    "DNA VAF",
+    "Evaluation",
+    "Allele",
+    "IC50 WT",
+    "RNA Expr",
+    "Num Passing Peptides",
+    "Gene",
+    "ID",
+    "%ile MT",
+    "Ref Match",
+    "Prob Pos",
+    "Best Peptide",
+    "patient_id",
+    "Best Transcript",
+    "interim_prediction",
+    "Tier",
+    "AA Change",
+    "Allele Expr",
+    "Pos",
+    "%ile WT",
+    "RNA VAF",
+    "IC50 MT",
+    "RNA Depth",
+    "final_accept_probability",
+    "final_prediction",
+    "is_calibration"
+  ],
+  "reference_columns": "All original reference columns retained in their original order",
+  "renamed_reference_columns": {
+    "python_Accept_pred_prob": "interim_accept_probability",
+    "python_Evaluation_pred": "interim_prediction"
+  },
+  "calibration_patients": [
+    "pt_33",
+    "pt_34",
+    "pt_35",
+    "pt_36"
+  ],
+  "calibration_rows": 170,
+  "evaluation_counts": {
+    "Reject": 476,
+    "Accept": 142,
+    "Review": 88
+  },
+  "evaluation_source": "interim_reference only; final source Evaluation ignored",
+  "interim_labels": "Saved python_Evaluation_pred; not recomputed",
+  "final_labels": "Reject p < 0.30; Review 0.30 <= p <= 0.55; Accept p > 0.55",
+  "patient_ids_anonymized": true,
+  "patient_mapping_sha256": "7c027d5bbcd35c3f93237e6c228ab6f2f60418bcdd2b95e991bd12a0b3b49c27"
+}

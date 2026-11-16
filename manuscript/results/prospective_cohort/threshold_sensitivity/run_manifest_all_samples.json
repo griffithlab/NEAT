@@ -1,0 +1,32 @@
+{
+  "analysis": "threshold_sensitivity",
+  "input": "prospective_model_comparison.csv",
+  "input_sha256": "daf914209809b9be30ca914772008988883d3dc4ddcb7310b1de01d60a5ab675",
+  "rows": 706,
+  "patients": 12,
+  "calibration_rows": 170,
+  "calibration_patients": [
+    "pt_33",
+    "pt_34",
+    "pt_35",
+    "pt_36"
+  ],
+  "versions": {
+    "numpy": "2.2.2",
+    "pandas": "2.2.3",
+    "scipy": "1.15.2",
+    "scikit-learn": "1.6.1",
+    "matplotlib": "3.10.1"
+  },
+  "no_model_fitting_or_threshold_selection": true,
+  "cohort": "all_samples",
+  "evaluated_rows": 706,
+  "evaluated_patients": 12,
+  "expert_accept_count": 142,
+  "expert_reject_count": 476,
+  "reject_threshold": 0.3,
+  "accept_threshold": 0.55,
+  "baseline_false_negative_pct": 0.0,
+  "baseline_false_accept_pct": 11.76470588235294,
+  "definition": "Separate strict sweeps: fraction of expert Accept with p < t; fraction of expert Reject with p > t"
+}
