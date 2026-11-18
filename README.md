@@ -14,7 +14,7 @@ The repository has two workflows with separate dependency files and model artifa
 | Section | Purpose | Instructions | Dependencies |
 | --- | --- | --- | --- |
 | Manuscript | Reproduce figures, repeated model-development analyses, and a demonstration prediction | [Manuscript README](manuscript/README.md) | [manuscript/requirements.txt](manuscript/requirements.txt) |
-| Model development | Encode data and retrain the revised pVACtools 7.2 model; retain the legacy 7.0 predictor | [Scripts README](model_development/scripts/README.md) | [model_development/requirements.txt](model_development/requirements.txt) |
+| Model development | Encode data, retrain the revised pVACtools 7.2 model, and predict new cases | [Scripts README](model_development/scripts/README.md) | [model_development/requirements.txt](model_development/requirements.txt) |
 
 Run the commands below from the **NEAT repository root**. Use separate Python
 environments for the two workflows.
@@ -52,10 +52,11 @@ NEAT/
     │   ├── README.md
     │   ├── encode_missing.py
     │   ├── train_model.py
-    │   └── predict.py                  # Legacy 7.0 prediction
+    │   └── predict.py                  # 7.2 model with missingness encoding
     └── model/
         ├── pvactools7.2_model/          # Revised model and saved evaluations
         │   ├── random_forest_ds_pvactools7.2.joblib
+        │   ├── label_encoders_numpy126.pkl
         │   ├── cv_results.csv
         │   ├── oob_performance.csv
         │   ├── prospective_performance.csv
@@ -174,15 +175,7 @@ contains `random_forest_ds_pvactools7.2.joblib` and saved CV, OOB, and prospecti
 evaluation outputs. See the [scripts README](model_development/scripts/README.md)
 for inputs, outputs, and usage of each script.
 
-### Legacy pVACtools 7.0 workflow
-
-`model_development/scripts/predict.py` still uses the legacy model, fitted
-imputer, and encoders in
-[pvactools7.0_model/](model_development/model/pvactools7.0_model/README.md).
-It has not been adapted to the 7.2 bundle. Previous `impute_missing.py` and
-`old_train.py` scripts are retained under `pvactools7.0_model/archived/`.
-
-For the legacy demo only:
+### Predict with the pVACtools 7.2 model
 
 ```bash
 python model_development/scripts/predict.py
@@ -190,7 +183,19 @@ python model_development/scripts/predict.py
 
 This reads the bundled manuscript demo TSVs and writes
 `model_development/data/Test.MHC_I.all_epitopes.aggregated.ML_predict.tsv`.
-The revised model requires its matching missingness encoding and bundle loader.
+It applies `pvactools7.2_model/label_encoders_numpy126.pkl`, adds WT/MT/RNA
+missingness indicators, replaces missing predictors with `-1`, and scores using
+`random_forest_ds_pvactools7.2.joblib`. Use `--sample`, `--data-dir`, and
+`--output-dir` for another case. The output TSV format is preserved.
+
+### Legacy pVACtools 7.0 artifacts
+
+The previous model, imputer, and encoders remain in
+[pvactools7.0_model/](model_development/model/pvactools7.0_model/README.md).
+Previous `impute_missing.py` and `old_train.py` scripts are retained under
+`pvactools7.0_model/archived/` as historical references. The current predictor
+uses missingness encoding and the 7.2 bundle.
+
 For pVACseq/pVACview integration, consult the
 [pVACtools documentation](https://pvactools.readthedocs.io/).
 

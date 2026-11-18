@@ -3,7 +3,8 @@
 The current encoding and training scripts support the pVACtools 7.2 model
 workflow. The saved model is
 `model_development/model/pvactools7.2_model/random_forest_ds_pvactools7.2.joblib`.
-`predict.py` still uses the legacy pVACtools 7.0 workflow.
+`predict.py` uses that model and the saved
+`pvactools7.2_model/label_encoders_numpy126.pkl` encoders.
 
 Run commands below from the **NEAT repository root**.
 
@@ -11,7 +12,7 @@ Run commands below from the **NEAT repository root**.
 | --- | --- | --- | --- |
 | `encode_missing.py` | Adds `WT_missing`, `MT_missing`, and `RNA_missing`; fills supported missing measurements with `-1`. Fits no imputer. | `model_development/data/merged_df_pre_imputation.csv` | `model_development/data/merged_df_encoded.csv` |
 | `train_model.py` | Excludes Review, treats Pending as Reject, integer-encodes categories, tunes a balanced random forest by 3-fold row-level CV/AUROC, then fits all eligible rows. | Encoded CSV supplied with `--input` below | `model_bundle.joblib`, `best_params.json`, CV results/membership, OOB metrics/predictions, feature importance, settings, and completion record in `--output-dir` |
-| `predict.py` **(legacy 7.0)** | Merges three pVACseq TSVs, applies saved encoders/imputer, and predicts Accept/Review/Reject. Does not use the 7.2 model or missingness indicators. | Demo `Test.*.tsv` files in `manuscript/data/predict_new_case_data/`; model, imputer, and encoders in `model_development/model/pvactools7.0_model/` | `model_development/data/Test.MHC_I.all_epitopes.aggregated.ML_predict.tsv` |
+| `predict.py` | Merges three pVACseq TSVs, applies saved label encoders, adds missingness indicators, fills missing predictors with `-1`, and predicts using the 7.2 model. | Demo `Test.*.tsv` files in `manuscript/data/predict_new_case_data/`; model and encoders in `model_development/model/pvactools7.2_model/` | `model_development/data/Test.MHC_I.all_epitopes.aggregated.ML_predict.tsv` |
 
 ## Encode and train
 
@@ -33,12 +34,19 @@ does not evaluate the prospective cohort or generate plots.
 `encode_missing.py` accepts `--input` and `--output`. Use `--help` on either
 encoding or training script for options.
 
-## Legacy prediction usage
+## Predict a case
 
 ```bash
 python model_development/scripts/predict.py
 ```
 
-This runs the 7.0 demo only. Its sample, model directory, artifact version, and
-output directory are configured at the bottom of `predict.py`; it has no CLI
-options for those settings.
+For another case, use `--sample NAME --data-dir /path/to/inputs
+--output-dir /path/to/results`. Supply `<sample>.MHC_I.all_epitopes.aggregated.tsv`,
+`<sample>.MHC_I.all_epitopes.tsv`, and
+`<sample>.MHC_II.all_epitopes.aggregated.tsv`.
+
+The saved label encoders must agree with the bundle's category mappings.
+Missing categories receive `-1`; unknown nonmissing categories raise an error.
+`WT_missing`, `MT_missing`, and `RNA_missing` are set before replacing missing
+predictors with `-1`, using the same groups as `encode_missing.py`. No imputer
+is loaded. Predictions retain the existing thresholds and aggregated TSV format.
