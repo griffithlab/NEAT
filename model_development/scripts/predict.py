@@ -1,406 +1,149 @@
-"""
-Simple prediction script for the Random Forest model with down-sampling method.
+"""Predict with the pVACtools 7.2 model, saved label encoders, and missingness encoding.
 
-This script:
-- Merges pVACtools-style MHC class I and class II outputs for a single case
-- Applies the published imputer and label encoders
-- Uses the trained Random Forest model to score each epitope
-- Writes a single aggregated TSV with updated ML predictions for MHC class I
-
-Run from ``model_development/scripts/`` (or any cwd). By default, pVACseq-style
-inputs are read from ``manuscript/data/predict_new_case_data/`` (bundled ``Test.*``
-demo files). Set ``output_dir`` or copy TSVs into ``model_development/data/`` if you
-want a self-contained ``model_development/`` tree. Artifacts default to
-``model_development/model/pvactools7.0_model/``.
+Run from NEAT: python model_development/scripts/predict.py
+Inputs: manuscript/data/predict_new_case_data/<sample>.*.tsv
+Output: model_development/data/<sample>.*.ML_predict.tsv
 """
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
-from typing import Tuple
+import pickle
+import re
 
 import joblib
 import numpy as np
 import pandas as pd
-import pickle
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT.parent / "manuscript" / "data" / "predict_new_case_data"
+MODEL_DIR = ROOT / "model" / "pvactools7.2_model"
+MODEL_FILENAME = "random_forest_ds_pvactools7.2.joblib"
+OUTPUT_DIR = ROOT / "data"
+SAMPLE_NAME = "Test"
+ARTIFACTS_VERSION = "numpy126"
+ML_THRESHOLD_ACCEPT = 0.55
+ML_THRESHOLD_REJECT = 0.30
+INDICATORS = ["WT_missing", "MT_missing", "RNA_missing"]
 
 
-def _model_development_root() -> Path:
-    """``model_development/`` — parent of ``scripts/`` (where this file lives)."""
-    return Path(__file__).resolve().parent.parent
+def read_columns(path, columns):
+    """Read required features, normalizing legacy predictor column names."""
+    aliases = {f"{method} {side} Score": f"{method} {side} IC50 Score"
+               for method in ["NetMHCpanEL", "MHCflurry", "MHCnuggetsI", "NetMHC",
+                              "NetMHCcons", "NetMHCpan", "PickPocket", "SMM", "SMMPMBEC"]
+               for side in ["WT", "MT"]}
+    aliases.update({f"NetMHCpanEL {side} Presentation Score": f"NetMHCpanEL {side} IC50 Score"
+                    for side in ["WT", "MT"]})
+    frame = pd.read_csv(path, sep="\t", usecols=lambda c: aliases.get(c, c) in columns,
+                        na_values=["", "NA", "NaN", "nan", "N/A", "n/a", "null", "None", "none", "<NA>"],
+                        keep_default_na=False).rename(columns=aliases)
+    if not frame.columns.is_unique:
+        raise ValueError(f"Duplicate predictor names after normalization in {path.name}.")
+    return frame.reindex(columns=columns)
 
 
-def _get_repo_paths() -> Tuple[Path, Path, Path]:
-    """Return model_development root, default input TSV directory, and artifact directory."""
-    root = _model_development_root()
-    # Demo ``Test.*`` inputs ship under manuscript/ in this repo; copy TSVs to ``model_development/data/`` to override.
-    default_input_dir = root.parent / "manuscript" / "data" / "predict_new_case_data"
-    default_model_dir = root / "model" / "pvactools7.0_model"
-    return root, default_input_dir, default_model_dir
-
-
-def _resolve_artifact_paths(
-    model_dir: Path,
-    artifacts_version: str,
-) -> Tuple[Path, Path, Path]:
-    """
-    Resolve paths to model artifacts in the given directory for a specific version.
-
-    Supported layouts:
-      (1) Flat: ``<model_dir>/rf_downsample_model_{version}.pkl``, etc.
-      (2) Nested: ``<model_dir>/{version}/rf_downsample_model_{version}.pkl``, etc.
-    """
-    flat = (
-        model_dir / f"rf_downsample_model_{artifacts_version}.pkl",
-        model_dir / f"trained_imputer_{artifacts_version}.joblib",
-        model_dir / f"label_encoders_{artifacts_version}.pkl",
-    )
-    if flat[0].is_file():
-        return flat
-    nested = model_dir / artifacts_version
-    return (
-        nested / f"rf_downsample_model_{artifacts_version}.pkl",
-        nested / f"trained_imputer_{artifacts_version}.joblib",
-        nested / f"label_encoders_{artifacts_version}.pkl",
-    )
-
-
-def merge_and_prepare_data(
-    class1_aggregated_path: Path,
-    class1_all_epitopes_path: Path,
-    class2_aggregated_path: Path,
-) -> pd.DataFrame:
-    """
-    Merge class I / class II files and engineer features for ML prediction.
-
-    This is a trimmed version of pvactools' merge_and_prepare_data,
-    but preserves the model's expected feature space.
-    """
-    print("Reading input files...")
-
-    mhc1_agg_columns = [
-        "ID",
-        "Index",
-        "Best Peptide",
-        "IC50 MT",
-        "IC50 WT",
-        "%ile MT",
-        "%ile WT",
-        "Allele",
-        "Allele Expr",
-        "DNA VAF",
-        "TSL",
-        "Num Passing Peptides",
-        "Pos",
-        "Prob Pos",
-        "RNA Depth",
-        "RNA Expr",
-        "RNA VAF",
-        "Ref Match",
-        "Evaluation",
-    ]
-    mhc2_agg_columns = [
-        "ID",
-        "%ile MT",
-        "%ile WT",
-        "IC50 MT",
-        "IC50 WT",
-    ]
-    mhc1_allepi_columns = [
-        "Index",
-        "MT Epitope Seq",
-        "HLA Allele",
-        "Gene of Interest",
-        "Corresponding Fold Change",
-        "Variant Type",
-        "Best MT IC50 Score",
-        "Best MT Percentile",
-        "Corresponding WT IC50 Score",
-        "Corresponding WT Percentile",
-        "Biotype",
-        "cysteine_count",
-    ]
-    predictor_columns = [
-        "MHCflurry MT IC50 Score",
-        "MHCflurry MT Percentile",
-        "MHCflurry WT IC50 Score",
-        "MHCflurry WT Percentile",
-        "MHCflurryEL Presentation MT Percentile",
-        "MHCflurryEL Presentation MT Score",
-        "MHCflurryEL Presentation WT Percentile",
-        "MHCflurryEL Presentation WT Score",
-        "MHCflurryEL Processing MT Score",
-        "MHCflurryEL Processing WT Score",
-        "MHCnuggetsI MT IC50 Score",
-        "MHCnuggetsI MT Percentile",
-        "MHCnuggetsI WT IC50 Score",
-        "MHCnuggetsI WT Percentile",
-        "Median Fold Change",
-        "NetMHC MT IC50 Score",
-        "NetMHC MT Percentile",
-        "NetMHC WT IC50 Score",
-        "NetMHC WT Percentile",
-        "NetMHCcons MT IC50 Score",
-        "NetMHCcons MT Percentile",
-        "NetMHCcons WT IC50 Score",
-        "NetMHCcons WT Percentile",
-        "NetMHCpan MT IC50 Score",
-        "NetMHCpan MT Percentile",
-        "NetMHCpan WT IC50 Score",
-        "NetMHCpan WT Percentile",
-        "NetMHCpanEL MT Presentation Score",
-        "NetMHCpanEL MT Percentile",
-        "NetMHCpanEL WT Presentation Score",
-        "NetMHCpanEL WT Percentile",
-        "Peptide Length",
-        "PickPocket MT IC50 Score",
-        "PickPocket MT Percentile",
-        "PickPocket WT IC50 Score",
-        "PickPocket WT Percentile",
-        "SMM MT IC50 Score",
-        "SMM MT Percentile",
-        "SMM WT IC50 Score",
-        "SMM WT Percentile",
-        "SMMPMBEC MT IC50 Score",
-        "SMMPMBEC MT Percentile",
-        "SMMPMBEC WT IC50 Score",
-        "SMMPMBEC WT Percentile",
-    ]
-
-    def get_column_info(file_path: Path, requested_columns):
-        available_cols = pd.read_csv(file_path, sep="\t", nrows=0).columns.tolist()
-        filtered_cols = [col for col in requested_columns if col in available_cols]
-        missing_cols = [col for col in requested_columns if col not in available_cols]
-        if missing_cols:
-            print(
-                f"Caution: missing columns in {file_path.name} will be filled with NA: {missing_cols}"
-            )
-        return filtered_cols, missing_cols
-
-    def add_missing_columns(df: pd.DataFrame, missing_cols) -> pd.DataFrame:
-        for col in missing_cols:
-            df[col] = np.nan
-        return df
-
-    mhc1_agg_cols_available, mhc1_agg_cols_missing = get_column_info(
-        class1_aggregated_path, mhc1_agg_columns
-    )
-    mhc1_agg_df = pd.read_csv(
-        class1_aggregated_path,
-        sep="\t",
-        na_values=["NA", "NaN", ""],
-        keep_default_na=False,
-        usecols=mhc1_agg_cols_available,
-    )
-    mhc1_agg_df = add_missing_columns(mhc1_agg_df, mhc1_agg_cols_missing)
-
-    mhc1_allepi_cols_available, mhc1_allepi_cols_missing = get_column_info(
-        class1_all_epitopes_path, mhc1_allepi_columns + predictor_columns
-    )
-    mhc1_allepi_df = pd.read_csv(
-        class1_all_epitopes_path,
-        sep="\t",
-        na_values=["NA", "NaN", ""],
-        keep_default_na=False,
-        usecols=mhc1_allepi_cols_available,
-    )
-    mhc1_allepi_df = add_missing_columns(mhc1_allepi_df, mhc1_allepi_cols_missing)
-
-    mhc2_agg_cols_available, mhc2_agg_cols_missing = get_column_info(
-        class2_aggregated_path, mhc2_agg_columns
-    )
-    mhc2_agg_df = pd.read_csv(
-        class2_aggregated_path,
-        sep="\t",
-        na_values=["NA", "NaN", ""],
-        keep_default_na=False,
-        usecols=mhc2_agg_cols_available,
-    )
-    mhc2_agg_df = add_missing_columns(mhc2_agg_df, mhc2_agg_cols_missing)
-
-    mhc1_agg_df.rename(
-        columns={
-            "IC50 MT": "IC50 MT class1",
-            "IC50 WT": "IC50 WT class1",
-            "%ile MT": "%ile MT class1",
-            "%ile WT": "%ile WT class1",
-        },
-        inplace=True,
-    )
-    mhc2_agg_df.rename(
-        columns={
-            "IC50 MT": "IC50 MT class2",
-            "IC50 WT": "IC50 WT class2",
-            "%ile MT": "%ile MT class2",
-            "%ile WT": "%ile WT class2",
-        },
-        inplace=True,
-    )
-
-    if mhc1_agg_df.shape[0] != mhc2_agg_df.shape[0]:
-        print(
-            "Warning: Class I and Class II aggregated files have different row counts; "
-            "this may cause NA predictions for some rows."
-        )
-
-    merged_df = pd.merge(mhc1_agg_df, mhc2_agg_df, on="ID")
-    merged_all = pd.merge(
-        merged_df,
-        mhc1_allepi_df,
-        how="inner",
+def merge_and_prepare_data(class1_aggregated_path, class1_all_epitopes_path,
+                           class2_aggregated_path, features):
+    """Merge the pVACseq tables and retain the final model's raw feature set."""
+    aggregate_columns = ["ID", "Index", "Best Peptide", "Allele", "Evaluation", "IC50 MT", "IC50 WT",
+        "%ile MT", "%ile WT", "Allele Expr", "DNA VAF", "TSL", "Num Passing Peptides", "Pos",
+        "Prob Pos", "RNA Depth", "RNA Expr", "RNA VAF", "Ref Match"]
+    scores = ["IC50 MT", "IC50 WT", "%ile MT", "%ile WT"]
+    class1 = read_columns(class1_aggregated_path, aggregate_columns).rename(
+        columns={c: f"{c} class1" for c in scores})
+    class2 = read_columns(class2_aggregated_path, ["ID", *scores]).rename(
+        columns={c: f"{c} class2" for c in scores})
+    raw_features = [c for c in features if c not in INDICATORS]
+    aggregate_features = set(class1.columns) | set(class2.columns) | {"Prob match"}
+    epitope_columns = ["Index", "MT Epitope Seq", "HLA Allele"] + [
+        c for c in raw_features if c not in aggregate_features]
+    epitopes = read_columns(class1_all_epitopes_path, epitope_columns)
+    merged = class1.merge(class2, on="ID").merge(epitopes,
         left_on=["Index", "Best Peptide", "Allele"],
-        right_on=["Index", "MT Epitope Seq", "HLA Allele"],
-    )
+        right_on=["Index", "MT Epitope Seq", "HLA Allele"])
+    if merged.empty:
+        raise ValueError("No candidates matched across the three input tables.")
+    merged["Pos"] = pd.to_numeric(merged.Pos.astype(str).str.extract(r"^(\d+)")[0], errors="coerce")
+    merged["Prob Pos"] = merged["Prob Pos"].fillna("0").astype(str).str.split(",").map(
+        lambda parts: int(float(parts[0])) if parts[0].replace(".", "", 1).isdigit() else 0)
+    merged["Prob match"] = merged.Pos.notna() & merged.Pos.eq(merged["Prob Pos"])
+    merged["Gene of Interest"] = merged["Gene of Interest"].fillna(False)
+    merged["TSL"] = pd.to_numeric(merged.TSL, errors="coerce").fillna(6).astype(int)
+    return merged[["ID", "Evaluation", *raw_features]]
 
-    # Pos parsing
-    if merged_all["Pos"].dtype == "object":
-        pos_extracted = merged_all["Pos"].astype(str).str.extract(r"^(\d+)")
-        merged_all["Pos"] = pos_extracted[0].astype("Int64").astype(float)
-    else:
-        merged_all["Pos"] = merged_all["Pos"].astype(float)
 
-    # Prob Pos parsing
-    merged_all["Prob Pos"] = (
-        merged_all["Prob Pos"]
-        .fillna("0")
-        .astype(str)
-        .str.split(",")
-        .apply(
-            lambda x: int(float(x[0])) if x[0].replace(".", "", 1).isdigit() else 0
-        )
-    )
+def encode_missing_data(data, bundle, label_encoders):
+    """Apply saved category encoders, set missingness flags, then replace nulls with -1."""
+    features = bundle["feature_order"]
+    if len(features) != 75 or len(set(features)) != 75 or not set(INDICATORS).issubset(features):
+        raise ValueError("Require the 75-feature Strategy 2 model, including its three indicators.")
+    if set(INDICATORS).intersection(data.columns):
+        raise ValueError("Provide raw predictors, before missingness encoding.")
+    raw_features = [c for c in features if c not in INDICATORS]
+    X = data[raw_features].copy().replace(
+        r"(?i)^\s*(?:na|n/a|nan|null|none|<na>)?\s*$", np.nan, regex=True)
 
-    merged_all["Prob match"] = merged_all.apply(
-        lambda row: "True"
-        if pd.notna(row["Pos"])
-        and row["Pos"]
-        in [
-            int(x)
-            for x in str(row["Prob Pos"]).split(",")
-            if x.replace(".", "", 1).isdigit()
-        ]
-        else "False",
-        axis=1,
-    )
-    merged_all["Prob match"] = merged_all["Prob match"].map(
-        {"True": True, "False": False}
-    ).astype(bool)
-
-    merged_all["Gene of Interest"] = (
-        merged_all["Gene of Interest"]
-        .fillna("False")
-        .map({"True": True, "False": False})
-        .astype(bool)
-    )
-
-    def convert_tsl_to_int(value):
-        if pd.isna(value):
-            return 6
-        if isinstance(value, str) and value.lower() in ["not supported", "na", "n/a", ""]:
-            return 6
-        try:
-            return int(float(value))
-        except (ValueError, TypeError):
-            return 6
-
-    merged_all["TSL"] = merged_all["TSL"].apply(convert_tsl_to_int).astype(int)
-
-    rename_map_v7 = {
-        "NetMHCpanEL MT Presentation Score": "NetMHCpanEL MT IC50 Score",
-        "NetMHCpanEL WT Presentation Score": "NetMHCpanEL WT IC50 Score",
+    # Encode categories using the supplied fitted encoders; leave missing cells null.
+    if set(label_encoders) != set(bundle["category_maps"]):
+        raise ValueError("Label encoder columns do not match the model's category maps.")
+    for column, encoder in label_encoders.items():
+        mapping = {value: i for i, value in enumerate(encoder.classes_)}
+        if mapping != bundle["category_maps"][column]:
+            raise ValueError(f"Label encoder mapping disagrees with the model for {column}.")
+        observed = X[column].notna()
+        values = X.loc[observed, column]
+        unknown = set(values) - set(encoder.classes_)
+        if unknown:
+            raise ValueError(f"Unknown categories in {column}: {sorted(map(str, unknown))}")
+        encoded = pd.Series(np.nan, index=X.index)
+        if observed.any():
+            encoded.loc[observed] = encoder.transform(values)
+        X[column] = encoded
+    for column in ["Ref Match", "Prob match", "Gene of Interest"]:
+        encoded = X[column].map({True: 1, False: 0, "True": 1, "False": 0, "true": 1, "false": 0})
+        if (X[column].notna() & encoded.isna()).any():
+            raise ValueError(f"Unknown boolean values in {column}.")
+        X[column] = encoded
+    X = X.apply(pd.to_numeric, errors="raise")
+    groups = {
+        "WT_missing": [c for c in X if "WT" in c.split() or re.fullmatch(r"(?:Corresponding|Median) Fold Change", c)],
+        "MT_missing": [c for c in X if re.fullmatch(r"(?:NetMHC|SMM|SMMPMBEC) MT (?:IC50 Score|Percentile)", c)],
+        "RNA_missing": [c for c in X if re.fullmatch(r"RNA (?:VAF|Depth)|Allele Expr", c)],
     }
-    merged_all = merged_all.rename(columns=rename_map_v7)
-
-    merged_all = merged_all.drop(
-        columns=["Index", "MT Epitope Seq", "HLA Allele", "Best Peptide", "Allele"]
-    )
-
-    return merged_all
-
-
-def clean_and_impute_data(
-    merged_all: pd.DataFrame,
-    model_dir: Path,
-    artifacts_version: str,
-) -> pd.DataFrame:
-    """Apply label encoders and imputer from the saved artifacts."""
-    print("Loading imputer and label encoders...")
-    _model_path, imputer_path, encoders_path = _resolve_artifact_paths(
-        model_dir, artifacts_version
-    )
-
-    imputer = joblib.load(imputer_path)
-    with open(encoders_path, "rb") as f:
-        label_encoders = pickle.load(f)
-
-    exclude_columns = ["ID", "Evaluation"]
-    columns_to_impute = merged_all.columns.difference(exclude_columns)
-
-    excluded_data = merged_all[exclude_columns].copy()
-    data_to_impute = merged_all[columns_to_impute].copy()
-
-    categorical_columns = data_to_impute.select_dtypes(include=["category", "object"]).columns
-    for col in categorical_columns:
-        if col in label_encoders:
-            le = label_encoders[col]
-            data_to_impute.loc[:, col] = data_to_impute[col].map(
-                lambda x: le.transform([x])[0]
-                if x in le.classes_
-                else le.transform([le.classes_[0]])[0]
-            )
-
-    imputed_data = imputer.transform(data_to_impute)
-    imputed_data = pd.DataFrame(imputed_data, columns=columns_to_impute)
-
-    post_imputed_data = pd.concat(
-        [excluded_data.reset_index(drop=True), imputed_data.reset_index(drop=True)],
-        axis=1,
-    )
-    return post_imputed_data
+    if [len(group) for group in groups.values()] != [29, 6, 3]:
+        raise ValueError("Unexpected WT/MT/RNA feature groups in the model.")
+    affected = [c for group in groups.values() for c in group] + ["Pos"]
+    if X[affected].le(-1).any().any():
+        raise ValueError("Missingness encoding requires raw measurements greater than -1 or null.")
+    for indicator, columns in groups.items():
+        X[indicator] = X[columns].isna().any(axis=1).astype(int)
+    # Pos and any other unavailable predictor also receive -1, without extra flags.
+    X = X[features].fillna(-1)
+    if not np.isfinite(X.to_numpy(dtype=float)).all():
+        raise ValueError("Predictors contain infinities.")
+    return X
 
 
-def make_ml_predictions(
-    post_imputed_data: pd.DataFrame,
-    model_dir: Path,
-    artifacts_version: str,
-    ml_threshold_accept: float = 0.55,
-    ml_threshold_reject: float = 0.30,
-) -> pd.DataFrame:
-    """Load RF model and add prediction columns."""
-    print("Loading model and making predictions...")
-    model_path, _imputer_path, _encoders_path = _resolve_artifact_paths(
-        model_dir, artifacts_version
-    )
-    rf_model = joblib.load(model_path)
-
-    predict_cols = [
-        col
-        for col in post_imputed_data.columns
-        if col not in ["ID", "Evaluation", "patient_id"]
-    ]
-
-    probs = rf_model.predict_proba(post_imputed_data[predict_cols])[:, 1]
-    post_imputed_data["Accept_pred_prob"] = probs
-
-    post_imputed_data["Evaluation_pred"] = np.where(
-        post_imputed_data["Accept_pred_prob"].isna(),
-        "Pending",
-        np.where(
-            post_imputed_data["Accept_pred_prob"] >= ml_threshold_accept,
-            "Accept",
-            np.where(
-                post_imputed_data["Accept_pred_prob"] > ml_threshold_reject,
-                "Review",
-                "Reject",
-            ),
-        ),
-    )
-
-    return post_imputed_data
+def make_ml_predictions(data, bundle, label_encoders,
+                        ml_threshold_accept=ML_THRESHOLD_ACCEPT,
+                        ml_threshold_reject=ML_THRESHOLD_REJECT):
+    X = encode_missing_data(data, bundle, label_encoders)
+    model = bundle["model"]
+    model.set_params(n_jobs=1)
+    result = data[["ID", "Evaluation"]].copy()
+    result["Accept_pred_prob"] = model.predict_proba(X)[:, list(model.classes_).index(1)]
+    if not np.isfinite(result.Accept_pred_prob).all() or not result.Accept_pred_prob.between(0, 1).all():
+        raise ValueError("The model returned invalid Accept probabilities.")
+    result["Evaluation_pred"] = np.select(
+        [result.Accept_pred_prob.ge(ml_threshold_accept), result.Accept_pred_prob.gt(ml_threshold_reject)],
+        ["Accept", "Review"], default="Reject")
+    return result
 
 
 def create_final_output(
-    post_imputed_data: pd.DataFrame,
+    predictions: pd.DataFrame,
     original_agg_file_path: Path,
     output_dir: Path,
     sample_name: str,
@@ -421,7 +164,7 @@ def create_final_output(
 
     base_df = orig_df.drop(columns=["Evaluation"])
     merged_df = base_df.merge(
-        post_imputed_data[["ID", "Evaluation_pred", "Accept_pred_prob"]],
+        predictions[["ID", "Evaluation_pred", "Accept_pred_prob"]],
         on="ID",
         how="left",
     ).rename(columns={"Evaluation_pred": "Evaluation"})
@@ -448,72 +191,36 @@ def create_final_output(
     return output_file
 
 
-def run_predictions(
-    sample_name: str,
-    model_dir: Path | None = None,
-    artifacts_version: str = "numpy126",
-    output_dir: Path | None = None,
-    ml_threshold_accept: float = 0.55,
-    ml_threshold_reject: float = 0.30,
-) -> Path:
-    """End-to-end prediction pipeline for a single case."""
-    if ml_threshold_reject > ml_threshold_accept:
-        raise ValueError(
-            f"ml_threshold_reject ({ml_threshold_reject}) must be <= ml_threshold_accept ({ml_threshold_accept})."
-        )
-
-    _, input_dir, default_model_dir = _get_repo_paths()
-    model_dir = model_dir or default_model_dir
-    model_dir = Path(model_dir)
-
-    if output_dir is None:
-        output_dir = _model_development_root() / "data"
-    output_dir = Path(output_dir)
-
-    class1_agg = input_dir / f"{sample_name}.MHC_I.all_epitopes.aggregated.tsv"
-    class1_all = input_dir / f"{sample_name}.MHC_I.all_epitopes.tsv"
-    class2_agg = input_dir / f"{sample_name}.MHC_II.all_epitopes.aggregated.tsv"
-
-    if not class1_agg.exists():
-        raise FileNotFoundError(f"Class I aggregated file not found: {class1_agg}")
-    if not class1_all.exists():
-        raise FileNotFoundError(f"Class I all epitopes file not found: {class1_all}")
-    if not class2_agg.exists():
-        raise FileNotFoundError(f"Class II aggregated file not found: {class2_agg}")
-
-    print(f"Starting prediction pipeline using artifacts version '{artifacts_version}'...")
-    merged_all = merge_and_prepare_data(class1_agg, class1_all, class2_agg)
-    post_imputed = clean_and_impute_data(merged_all, model_dir, artifacts_version)
-    post_imputed = make_ml_predictions(
-        post_imputed,
-        model_dir,
-        artifacts_version,
-        ml_threshold_accept=ml_threshold_accept,
-        ml_threshold_reject=ml_threshold_reject,
-    )
-    output_file = create_final_output(post_imputed, class1_agg, output_dir, sample_name)
-    print("Prediction pipeline completed successfully.")
-    return output_file
-
-
-# Hard-coded configuration
-SAMPLE_NAME = "Test"
-# Artifacts: rf_downsample_model_<version>.pkl, trained_imputer_<version>.joblib, label_encoders_<version>.pkl
-MODEL_DIR = _model_development_root() / "model" / "pvactools7.0_model"
-# Predictions written under model_development/data/ by default
-OUTPUT_DIR = _model_development_root() / "data"
-ARTIFACTS_VERSION = "numpy126"
-ML_THRESHOLD_ACCEPT = 0.55
-ML_THRESHOLD_REJECT = 0.30
+def run_predictions(sample_name=SAMPLE_NAME, model_dir=None, artifacts_version=ARTIFACTS_VERSION,
+                    output_dir=None, ml_threshold_accept=ML_THRESHOLD_ACCEPT,
+                    ml_threshold_reject=ML_THRESHOLD_REJECT, input_dir=None):
+    """Merge input TSVs, encode predictors, and score with the revised model."""
+    if not 0 <= ml_threshold_reject <= ml_threshold_accept <= 1:
+        raise ValueError("Require 0 <= reject threshold <= accept threshold <= 1.")
+    model_dir = Path(model_dir) if model_dir is not None else MODEL_DIR
+    input_dir = Path(input_dir) if input_dir is not None else DATA_DIR
+    output_dir = Path(output_dir) if output_dir is not None else OUTPUT_DIR
+    bundle = joblib.load(model_dir / MODEL_FILENAME)
+    encoders_path = model_dir / f"label_encoders_{artifacts_version}.pkl"
+    with encoders_path.open("rb") as handle:
+        label_encoders = pickle.load(handle)
+    print(f"Using model: {model_dir / MODEL_FILENAME}")
+    print(f"Using label encoders: {encoders_path}")
+    class1 = input_dir / f"{sample_name}.MHC_I.all_epitopes.aggregated.tsv"
+    data = merge_and_prepare_data(class1,
+        input_dir / f"{sample_name}.MHC_I.all_epitopes.tsv",
+        input_dir / f"{sample_name}.MHC_II.all_epitopes.aggregated.tsv", bundle["feature_order"])
+    predictions = make_ml_predictions(data, bundle, label_encoders,
+                                      ml_threshold_accept, ml_threshold_reject)
+    return create_final_output(predictions, class1, output_dir, sample_name)
 
 
 if __name__ == "__main__":
-    run_predictions(
-        sample_name=SAMPLE_NAME,
-        model_dir=MODEL_DIR,
-        artifacts_version=ARTIFACTS_VERSION,
-        output_dir=OUTPUT_DIR,
-        ml_threshold_accept=ML_THRESHOLD_ACCEPT,
-        ml_threshold_reject=ML_THRESHOLD_REJECT,
-    )
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sample", default=SAMPLE_NAME)
+    parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
+    parser.add_argument("--model-dir", type=Path, default=MODEL_DIR)
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    args = parser.parse_args()
+    run_predictions(args.sample, model_dir=args.model_dir,
+                    input_dir=args.data_dir, output_dir=args.output_dir)

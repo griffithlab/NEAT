@@ -1,3 +1,8 @@
+"""RETIRED: legacy imputation workflow, retained for reference.
+
+Use encode_missing.py for the revised Strategy 2 missingness encoding.
+"""
+
 # %% Import dependencies
 import pickle
 import sys

@@ -1,25 +1,10 @@
-# -----------------------------------------------------------------------------
-# ITB_Automation_ML_Predictor — impute_missing.py, train.py, predict.py
-# -----------------------------------------------------------------------------
-# Pinned to match conda env ``neoantigen_ml_numpy126`` (``pip show`` versions).
-# Python there is 3.11.x.
-#
-# Suggested setup (venv or conda + pip):
-#   conda create -n itb_ml python=3.11 -y
-#   conda activate itb_ml
-#   pip install -r requirements.txt
-#
-# Notes:
-# - ``predict.py`` loads a pickled ``BalancedRandomForestClassifier``; that requires
-#   ``imbalanced-learn`` at predict time, not only at train time.
-# - If ``pip install numpy==1.26.4`` fails on your platform, install NumPy with conda
-#   first, then ``pip install -r requirements.txt`` with the rest.
-# -----------------------------------------------------------------------------
+# Model-development dependencies from susanna_test_3.11 (Python 3.11.14).
+# From the NEAT root: python -m pip install -r model_development/requirements.txt
 
 numpy==1.26.4
-pandas==2.3.3
-scipy==1.16.2
-joblib==1.5.2
+pandas==2.0.3
+scipy==1.15.3
+joblib==1.5.1
 threadpoolctl==3.6.0
-scikit-learn==1.7.2
+scikit-learn==1.6.1
 imbalanced-learn==0.14.0
