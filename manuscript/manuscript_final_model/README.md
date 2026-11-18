@@ -19,4 +19,4 @@ Use `--output-dir /path/to/results` to change the destination.
 
 The supplied historical bundle was saved with scikit-learn 1.7.2 and emits a
 version warning in the shared environment (1.6.1). It has not been retrained or
-converted. See the manuscript validation notes for the checks performed.
+converted.

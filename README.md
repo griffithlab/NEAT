@@ -27,7 +27,6 @@ NEAT/
 ├── LICENSE
 ├── manuscript/
 │   ├── README.md
-│   ├── VALIDATION.md
 │   ├── requirements.txt
 │   ├── manuscript_final_model/          # Final bundle and best parameters
 │   ├── manuscript_interim_model/        # Historical forest, imputer, and encoders
@@ -142,8 +141,8 @@ python manuscript/scripts/predict_final_model.py \
 Supply `<sample>.MHC_I.all_epitopes.aggregated.tsv`,
 `<sample>.MHC_I.all_epitopes.tsv`, and
 `<sample>.MHC_II.all_epitopes.aggregated.tsv`.
-See the [validation notes](manuscript/VALIDATION.md) for checks, training limits,
-and the historical final bundle's version warning.
+See the [final-model instructions](manuscript/manuscript_final_model/README.md)
+for details about the saved bundle and its version warning.
 
 ## pVACtools 7.2 model development
 

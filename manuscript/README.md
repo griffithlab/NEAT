@@ -64,5 +64,5 @@ Uses the supplied final model and demo TSVs, and writes an aggregated TSV under
 `--sample NAME --data-dir /path/to/inputs --output-dir /path/to/results`.
 
 The historical final bundle emits a scikit-learn version warning in the shared
-environment. It remains unchanged. See [validation notes](VALIDATION.md) for
-checks and the limits of training reproducibility.
+environment. See the [final-model instructions](manuscript_final_model/README.md)
+for details about the saved bundle.
